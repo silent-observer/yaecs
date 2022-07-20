@@ -1,0 +1,4 @@
+.vscode/*
+profile_results.txt
+*.exe
+*.dll
