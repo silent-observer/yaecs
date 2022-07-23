@@ -210,6 +210,8 @@ proc newEntity*[W: ref object](w: W): Entity[W] =
 proc newEntities*[W: ref object](w: W, count: int): seq[Entity[W]] =
   for i in 0..<count:
     result.add w.newEntity()
+proc initEmptyEntity*[W: ref object](): Entity[W] {.inline.} =
+  Entity[W](world: nil, id: -1)
 
 proc defineDelete(name: NimNode, internal: WorldInternalData, global: bool): NimNode {.compileTime.} =
   let e = genSym(nskParam, "e")
