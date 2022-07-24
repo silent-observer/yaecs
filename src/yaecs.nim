@@ -40,7 +40,7 @@ proc globalName(name: NimNode, global: bool): NimNode {.compileTime, inline.} =
 proc defineWorld(name: NimNode, internal: WorldInternalData, global: bool): NimNode {.compileTime.} =
   var recList = nnkRecList.newTree()
   for component in internal.components.values:
-    let name = ident("pool_" & component.typeName)
+    let name = ident("pool" & component.typeName)
     if component.isRare:
       recList.add newIdentDefs(name, nnkBracketExpr.newTree(
         bindSym"RareComponentPool", newIdentNode(component.typeName)
@@ -51,7 +51,7 @@ proc defineWorld(name: NimNode, internal: WorldInternalData, global: bool): NimN
       ))
   for tag in internal.tags.values:
     if tag.isRare:
-      let name = newIdentNode("pool_" & tag.typeName)
+      let name = newIdentNode("pool" & tag.typeName)
       recList.add newIdentDefs(name, bindSym"RareTagPool")
 
   recList.add newIdentDefs(
@@ -92,7 +92,7 @@ proc defineWorldConstructor(name: NimNode, internal: WorldInternalData, global: 
   )
 
   for component in internal.components.values:
-    let compPool = ident("pool_" & component.typeName)
+    let compPool = ident("pool" & component.typeName)
     let val = if component.isRare:
         newAssignment(
           newDotExpr(ident"result", compPool),
@@ -125,7 +125,7 @@ proc defineWorldConstructor(name: NimNode, internal: WorldInternalData, global: 
 proc defineAddComponent(name: NimNode, internal: WorldInternalData, global: bool): seq[NimNode] {.compileTime.} =
   var index = 0
   for component in internal.components.values:
-    let pool = ident("pool_" & component.typeName)
+    let pool = ident("pool" & component.typeName)
     let compType = ident(component.typeName)
     let addName = ident("add").globalName(global)
     let removeName = ident("remove" & component.typeName).globalName(global)
@@ -179,7 +179,7 @@ proc defineAddComponent(name: NimNode, internal: WorldInternalData, global: bool
     let addName = ident("add" & tag.typeName).globalName(global)
     let removeName = ident("remove" & tag.typeName).globalName(global)
     if tag.isRare:
-      let pool = ident("pool_" & tag.typeName) 
+      let pool = ident("pool" & tag.typeName) 
       let p1 = quote do:
         proc `addName`(e: Entity[`name`]) {.inline.} =
           if not e.world.`pool`.contains(e.id):
@@ -221,7 +221,7 @@ proc defineDelete(name: NimNode, internal: WorldInternalData, global: bool): Nim
       if `e`.world == nil: return
       `e`.world.entityFreeList.add `e`.id
   for component in internal.components.values:
-    let pool = ident("pool_" & component.typeName)
+    let pool = ident("pool" & component.typeName)
     if component.isRare:
       result[^1].add quote do:
         `e`.world.`pool`.remove `e`.id
@@ -233,7 +233,7 @@ proc defineDelete(name: NimNode, internal: WorldInternalData, global: bool): Nim
           `e`.`removeName`()
   for tag in internal.tags.values:
     if tag.isRare:
-      let pool = ident("pool_" & tag.typeName)
+      let pool = ident("pool" & tag.typeName)
       result[^1].add quote do:
         `e`.world.`pool`.remove `e`.id
   result[^1].add quote do:
@@ -241,7 +241,7 @@ proc defineDelete(name: NimNode, internal: WorldInternalData, global: bool): Nim
 
 proc defineComponentGetters(name: NimNode, internal: WorldInternalData, global: bool): seq[NimNode] {.compileTime.} =
   for index, component in enumerate(internal.components.values):
-    let pool = ident("pool_" & component.typeName)
+    let pool = ident("pool" & component.typeName)
     let compType = ident(component.typeName)
     let aliasId = ident(component.alias).globalName(global)
     let aliasIdSetter = ident(component.alias & "=").globalName(global)
@@ -286,7 +286,7 @@ proc defineHas(name: NimNode, internal: WorldInternalData, global: bool): NimNod
     let cond = quote do:
       `c` is `compType`
     if component.isRare:
-      let pool = ident("pool_" & component.typeName)
+      let pool = ident("pool" & component.typeName)
       let body = quote do:
         `e`.world.`pool`.contains(`e`.id)
       result[^1][0].add nnkElifBranch.newTree(cond, body)
@@ -301,7 +301,7 @@ proc defineHas(name: NimNode, internal: WorldInternalData, global: bool): NimNod
     let cond = quote do:
       `c` is `compType`
     if tag.isRare:
-      let pool = ident("pool_" & tag.typeName)
+      let pool = ident("pool" & tag.typeName)
       let body = quote do:
         `e`.world.`pool`.contains(`e`.id)
       result[^1][0].add nnkElifBranch.newTree(cond, body)
@@ -328,7 +328,7 @@ proc defineRegularQuery(name: NimNode, internal: WorldInternalData, filter: Filt
     if c in internal.bitarrayNames:
       blArr.add newIntLitNode(internal.bitarrayNames.find(c))
     else:
-      let pool = ident("pool_" & c)
+      let pool = ident("pool" & c)
       blackListRare.add quote do:
         if `index`.EntityId in `world`.`pool`:
           `index`.inc
@@ -357,7 +357,7 @@ proc defineRareQuery(name: NimNode, internal: WorldInternalData,
     if c in internal.bitarrayNames:
       wlArr.add newIntLitNode(internal.bitarrayNames.find(c))
     elif c != rareObject:
-      let pool = ident("pool_" & c)
+      let pool = ident("pool" & c)
       wlRare.add quote do:
         if `id`.EntityId notin `world`.`pool`: continue
 
@@ -367,11 +367,11 @@ proc defineRareQuery(name: NimNode, internal: WorldInternalData,
     if c in internal.bitarrayNames:
       blArr.add newIntLitNode(internal.bitarrayNames.find(c))
     else:
-      let pool = ident("pool_" & c)
+      let pool = ident("pool" & c)
       blRare.add quote do:
         if `id`.EntityId in `world`.`pool`: continue
 
-  let rarePool = ident("pool_" & rareObject)
+  let rarePool = ident("pool" & rareObject)
 
   quote do:
     iterator `queryName`(`world`: `name`): Entity[`name`] =
@@ -398,7 +398,7 @@ proc defineIs(name: NimNode, internal: WorldInternalData, filter: Filter, global
     if c in internal.bitarrayNames:
       wlArr.add newIntLitNode(internal.bitarrayNames.find(c))
     else:
-      let pool = ident("pool_" & c)
+      let pool = ident("pool" & c)
       wlRare.add quote do:
         if `e`.id notin `e`.world.`pool`: return false
 
@@ -408,7 +408,7 @@ proc defineIs(name: NimNode, internal: WorldInternalData, filter: Filter, global
     if c in internal.bitarrayNames:
       blArr.add newIntLitNode(internal.bitarrayNames.find(c))
     else:
-      let pool = ident("pool_" & c)
+      let pool = ident("pool" & c)
       blRare.add quote do:
         if `e`.id in `e`.world.`pool`: return false
 
