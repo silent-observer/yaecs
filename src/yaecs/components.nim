@@ -1,6 +1,5 @@
 import pool, common
 from sequtils import newSeqWith
-import std/enumerate
 
 type 
   ComponentPool*[T] = object
