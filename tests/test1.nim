@@ -390,3 +390,35 @@ test "owned entities":
     let oe = w.newOwnedEntity()
     oe.get.add Destroyable()
   check destroyCounter == 2
+
+test "long distance definitions":
+  type Position = object
+    x, y: int
+  type Velocity = object
+    x, y: int
+
+  registerComponents World:
+    Position as pos
+    Velocity as vel
+  
+  registerFilters World:
+    (Position, Velocity) as Movable
+
+  genWorld World
+  
+  let w = newWorld(entityMaxCount=100_000)
+  let es = w.newEntities(5000)
+  for i in 0..<5000:
+    es[i].add Position(x: i, y: 0)
+  for i in 0..<2500:
+    es[i].add Velocity(x: 1, y: 2)
+  
+  for i in 1..100:
+    for e in w.queryMovable():
+      e.pos.x += e.vel.x
+      e.pos.y += e.vel.y
+  
+  for i in 0..<2500:
+    check es[i].pos == Position(x: i + 100, y: 200)
+  for i in 2500..<5000:
+    check es[i].pos == Position(x: i, y: 0)

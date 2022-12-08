@@ -1,5 +1,6 @@
 import macros, yaecs/[pool, components, bitarray, common], tables, std/enumerate
 import std/genasts
+import macrocache, strutils
 export bitarray, pool, components, common
 
 type
@@ -350,6 +351,7 @@ proc defineRareQuery(name: NimNode, internal: WorldInternalData,
   let 
     world = genSym(nskParam, "world")
     id = genSym(nskLet, "id")
+    i = genSym(nskVar, "i")
 
   var wlArr = nnkBracket.newTree()
   var wlRare: NimNode = newStmtList()
@@ -359,7 +361,9 @@ proc defineRareQuery(name: NimNode, internal: WorldInternalData,
     elif c != rareObject:
       let pool = ident("pool" & c)
       wlRare.add quote do:
-        if `id`.EntityId notin `world`.`pool`: continue
+        if `id`.EntityId notin `world`.`pool`:
+          inc `i`
+          continue
 
   var blArr = nnkBracket.newTree()
   var blRare: NimNode = newStmtList()
@@ -369,23 +373,25 @@ proc defineRareQuery(name: NimNode, internal: WorldInternalData,
     else:
       let pool = ident("pool" & c)
       blRare.add quote do:
-        if `id`.EntityId in `world`.`pool`: continue
+        if `id`.EntityId in `world`.`pool`: 
+          inc `i`
+          continue
 
   let rarePool = ident("pool" & rareObject)
 
   quote do:
     iterator `queryName`(`world`: `name`): Entity[`name`] =
-      var i: int = 0
-      while i < `world`.`rarePool`.listLen:
-        let `id` = `world`.`rarePool`.getId(i)
+      var `i`: int = 0
+      while `i` < `world`.`rarePool`.listLen:
+        let `id` = `world`.`rarePool`.getId(`i`)
         let arr = `world`.entities[`id`]
         if checkMasks(arr, `wlArr`, `blArr`):
           `wlRare`
           `blRare`
           let oldLen = `world`.`rarePool`.listLen
           yield Entity[`name`](world: `world`, id: `id`.EntityId)
-          i -= oldLen - `world`.`rarePool`.listLen
-        inc i
+          `i` -= oldLen - `world`.`rarePool`.listLen
+        inc `i`
 
 proc defineIs(name: NimNode, internal: WorldInternalData, filter: Filter, global: bool): NimNode {.compileTime.} =
   let isName = ident("is" & filter.alias).globalName(global)
@@ -469,94 +475,103 @@ proc defineOwned(name: NimNode, internal: WorldInternalData, global: bool): NimN
     proc printEntityCountProc(w: name) {.inline.} =
       echo "entityCount=", w.entities.len - w.entityFreeList.len
 
-proc genWorldProc(name: NimNode, list: NimNode, global: bool): NimNode {.compileTime.} =
-  var internal = WorldInternalData(
-    components: initTable[string, ComponentData](),
-    tags: initTable[string, TagData](),
-    filters: @[]
+const componentTable = CacheTable"componentTable"
+const tagTable = CacheTable"tagTable"
+const filterTable = CacheTable"filterTable"
+
+proc handleComponent(l: NimNode): ComponentData =
+  l.expectKind nnkInfix
+  l.expectLen 3
+  l[0].expectIdent "as"
+  (result.typeName, result.convert) = (if l[1].kind == nnkCall:
+    l[1].expectLen 2
+    l[1][0].expectKind nnkIdent
+    (l[1][0].strVal, l[1][1])
+  else:
+    l[1].expectKind nnkIdent
+    (l[1].strVal, nil)
+  )
+  
+  (result.alias, result.isRare) = (if l[2].kind == nnkCommand:
+    l[2].expectLen 2
+    l[2][0].expectKind nnkIdent
+    l[2][1].expectKind nnkPar
+    l[2][1].expectLen 1
+    l[2][1][0].expectIdent "rare"
+    (l[2][0].strVal, true)
+  else:
+    l[2].expectKind nnkIdent
+    (l[2].strVal, false)
   )
 
+proc handleTag(l: NimNode): TagData =
+  (result.typeName, result.isRare) = (if l.kind == nnkCommand:
+    l.expectLen 2
+    l[0].expectKind nnkIdent
+    l[1].expectKind nnkPar
+    l[1].expectLen 1
+    l[1][0].expectIdent "rare"
+    (l[0].strVal, true)
+  else:
+    l.expectKind nnkIdent
+    (l.strVal, false)
+  )
+
+proc handleFilter(l: NimNode): Filter =
+  l.expectKind nnkInfix
+  l.expectLen 3
+  l[0].expectIdent "as"
+  l[2].expectKind nnkIdent
+  if l[1].kind == nnkIdent:
+    return Filter(
+      whiteList: @[l[1].strVal],
+      blackList: @[],
+      alias: l[2].strVal)
+  else:
+    l[1].expectKind nnkTupleConstr
+    var whiteList: seq[string] = @[]
+    var blackList: seq[string] = @[]
+    for t in l[1]:
+      if t.kind == nnkPrefix:
+        t[0].expectIdent "not"
+        t[1].expectKind nnkIdent
+        blackList.add t[1].strVal
+      else:
+        t.expectKind nnkIdent
+        whiteList.add t.strVal
+    return Filter(
+      whiteList: whiteList,
+      blackList: blackList,
+      alias: l[2].strVal)
+
+macro registerComponents*(worldName: untyped, list: untyped = nil): untyped =
+  worldName.expectKind nnkIdent
+  let name = worldName.strVal
   if list != nil:
     list.expectKind nnkStmtList
-    for child in list:
-      child.expectKind nnkCall
-      child.expectLen 2
-      child[0].expectKind nnkIdent
-      child[1].expectKind nnkStmtList
-      if child[0].eqIdent "components":
-        for l in child[1]:
-          l.expectKind nnkInfix
-          l.expectLen 3
-          l[0].expectIdent "as"
-          let (typeName, convert) = (if l[1].kind == nnkCall:
-            l[1].expectLen 2
-            l[1][0].expectKind nnkIdent
-            (l[1][0].strVal, l[1][1])
-          else:
-            l[1].expectKind nnkIdent
-            (l[1].strVal, nil)
-          )
-          
-          let (alias, isRare) = (if l[2].kind == nnkCommand:
-            l[2].expectLen 2
-            l[2][0].expectKind nnkIdent
-            l[2][1].expectKind nnkPar
-            l[2][1].expectLen 1
-            l[2][1][0].expectIdent "rare"
-            (l[2][0].strVal, true)
-          else:
-            l[2].expectKind nnkIdent
-            (l[2].strVal, false)
-          )
-          internal.components[typeName] = ComponentData(
-            typeName: typeName,
-            convert: convert,
-            alias: alias,
-            isRare: isRare)
-      elif child[0].eqIdent "tags":
-        for l in child[1]:
-          let (typeName, isRare) = (if l.kind == nnkCommand:
-            l.expectLen 2
-            l[0].expectKind nnkIdent
-            l[1].expectKind nnkPar
-            l[1].expectLen 1
-            l[1][0].expectIdent "rare"
-            (l[0].strVal, true)
-          else:
-            l.expectKind nnkIdent
-            (l.strVal, false)
-          )
-          internal.tags[typeName] = TagData(typeName: typeName, isRare: isRare)
-      elif child[0].eqIdent "filters":
-        for line in child[1]:
-          line.expectKind nnkInfix
-          line.expectLen 3
-          line[0].expectIdent "as"
-          line[2].expectKind nnkIdent
-          if line[1].kind == nnkIdent:
-            internal.filters.add Filter(
-              whiteList: @[line[1].strVal],
-              blackList: @[],
-              alias: line[2].strVal)
-          else:
-            line[1].expectKind nnkTupleConstr
-            var whiteList: seq[string] = @[]
-            var blackList: seq[string] = @[]
-            for t in line[1]:
-              if t.kind == nnkPrefix:
-                t[0].expectIdent "not"
-                t[1].expectKind nnkIdent
-                blackList.add t[1].strVal
-              else:
-                t.expectKind nnkIdent
-                whiteList.add t.strVal
-            internal.filters.add Filter(
-              whiteList: whiteList,
-              blackList: blackList,
-              alias: line[2].strVal)
-      else:
-        error("Can only have components and filters specifications in the ECS description", child[0])
+    for l in list:
+      let c = l.handleComponent()
+      componentTable[name & "." & c.typeName] = l
 
+macro registerTags*(worldName: untyped, list: untyped = nil): untyped =
+  worldName.expectKind nnkIdent
+  let name = worldName.strVal
+  if list != nil:
+    list.expectKind nnkStmtList
+    for l in list:
+      let t = l.handleTag()
+      tagTable[name & "." & t.typeName] = l
+
+macro registerFilters*(worldName: untyped, list: untyped = nil): untyped =
+  worldName.expectKind nnkIdent
+  let name = worldName.strVal
+  if list != nil:
+    list.expectKind nnkStmtList
+    for l in list:
+      let f = l.handleFilter()
+      filterTable[name & "." & f.alias] = l
+
+proc genWorldFromInternal(name: NimNode, internal: var WorldInternalData, global: bool): NimNode {.compileTime.} =
   for c in internal.components.values:
     if not c.isRare:
       internal.bitarrayNames.add c.typeName
@@ -582,6 +597,50 @@ proc genWorldProc(name: NimNode, list: NimNode, global: bool): NimNode {.compile
   result.add defineDelete(name, internal, global)
   result.add defineOwned(name, internal, global)
   result.add defineQuery(name, internal, global)
+
+proc genWorldProc(name: NimNode, list: NimNode, global: bool): NimNode {.compileTime.} =
+  var internal = WorldInternalData(
+    components: initTable[string, ComponentData](),
+    tags: initTable[string, TagData](),
+    filters: @[]
+  )
+
+  for key, value in componentTable:
+    let s = key.split('.', 2)
+    if s[0] == name.strVal:
+      internal.components[s[1]] = value.handleComponent()
+  for key, value in tagTable:
+    let s = key.split('.', 2)
+    if s[0] == name.strVal:
+      internal.tags[s[1]] = value.handleTag()
+  for key, value in filterTable:
+    let s = key.split('.', 2)
+    if s[0] == name.strVal:
+      internal.filters.add value.handleFilter()
+
+  if list != nil:
+    list.expectKind nnkStmtList
+    for child in list:
+      child.expectKind nnkCall
+      child.expectLen 2
+      child[0].expectKind nnkIdent
+      child[1].expectKind nnkStmtList
+      if child[0].eqIdent "components":
+        for l in child[1]:
+          let c = l.handleComponent()
+          internal.components[c.typeName] = c
+      elif child[0].eqIdent "tags":
+        for l in child[1]:
+          let t = l.handleTag()
+          internal.tags[t.typeName] = t
+      elif child[0].eqIdent "filters":
+        for l in child[1]:
+          let f = l.handleFilter()
+          internal.filters.add f
+      else:
+        error("Can only have components and filters specifications in the ECS description", child[0])
+  genWorldFromInternal(name, internal, global)
+
 
 macro genWorld*(name: untyped, list: untyped = nil): untyped =
   genWorldProc(name, list, false)
